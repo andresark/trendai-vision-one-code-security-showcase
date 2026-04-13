@@ -1,0 +1,10 @@
+Flask==2.0.1
+Jinja2==3.0.1
+requests==2.25.1
+PyYAML==5.4
+cryptography==3.3.2
+Werkzeug==2.0.1
+urllib3==1.26.4
+paramiko==2.7.2
+Pillow==8.2.0
+numpy==1.21.0

@@ -1,0 +1,18 @@
+# Override rules for TMAS — suppress specific findings
+# This file demonstrates how to manage false positives and accepted risks.
+#
+# Use with: tmas scan --override overrides/tmas_overrides.yml
+# Docs: https://docs.trendmicro.com/en-us/documentation/article/trend-vision-one-artifactscannerclire
+
+vulnerabilities:
+  exceptions:
+    # Accept risk: this CVE is not exploitable in our context
+    - id: CVE-2022-37434   # zlib: heap-based buffer over-read in inflate()
+      reason: "Accepted risk — demo application does not process untrusted compressed data"
+
+secrets:
+  exceptions:
+    # Known test credential — not a real secret
+    - id: "generic-api-key"
+      path: "app/server.js"
+      reason: "Intentional demo credential for TMAS showcase"

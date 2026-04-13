@@ -1,0 +1,344 @@
+# ──────────────────────────────────────────────────────────────────────────────
+#  TrendAI Vision One — Artifact Scanner (TMAS) Showcase
+# ──────────────────────────────────────────────────────────────────────────────
+#  This workflow demonstrates every major scanning capability of TMAS:
+#
+#    1. Vulnerability Scanning   — finds CVEs in dependencies and OS packages
+#    2. Secrets Detection        — finds leaked credentials in source code
+#    3. Malware Detection        — finds malware inside container image layers
+#    4. SBOM Generation          — produces a Software Bill of Materials
+#    5. Policy Evaluation        — enforces security policy gates in CI/CD
+#
+#  Each job runs independently and writes a rich summary to the GitHub UI.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: "\U0001F50D TMAS Security Scan Showcase"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "Vision One region"
+        required: false
+        default: "us-east-1"
+        type: choice
+        options:
+          - us-east-1
+          - eu-central-1
+          - ap-northeast-1
+          - ap-southeast-1
+          - ap-southeast-2
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  TMAS_REGION: ${{ inputs.region || 'us-east-1' }}
+  IMAGE_TAG: tmas-showcase:scan
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  JOB 1 — Vulnerability Scanning (Source Code)
+# ──────────────────────────────────────────────────────────────────────────────
+jobs:
+  vulnerability-scan-source:
+    name: "\U0001F41B Vulnerability Scan — Source Code"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: "Scan: Find CVEs in dependencies"
+        id: vuln_scan
+        uses: trendmicro/tmas-scan-action@v3.1.3
+        with:
+          vulnerabilitiesScan: true
+          malwareScan: false
+          secretsScan: false
+          artifact: dir:.
+          additionalArgs: --region=${{ env.TMAS_REGION }} --saveSBOM
+          tmasApiKey: ${{ secrets.TMAS_API_KEY }}
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-source-code
+          path: "*.cdx.json"
+          if-no-files-found: ignore
+
+      - name: Write job summary
+        if: always()
+        run: |
+          cat <<'SUMMARY' >> $GITHUB_STEP_SUMMARY
+          ## :bug: Vulnerability Scan — Source Code
+
+          **What this does:** Scans `package.json`, `requirements.txt`, `go.mod`, and other
+          dependency manifests for known CVEs using the `dir:` artifact type.
+
+          **Artifact scanned:** `dir:.` (entire repository)
+
+          **Why it matters:** Open-source dependencies account for [~80% of code](https://www.synopsys.com/software-integrity/resources/analyst-reports/open-source-security-risk-analysis.html)
+          in modern applications. A single vulnerable transitive dependency can compromise your
+          entire stack. TMAS checks every package version against CVE databases and reports
+          severity, fix versions, and CVSS scores.
+
+          > **TMAS flags:** `-V` (vulnerabilities) + `--saveSBOM`
+
+          :arrow_right: Expand the **"Scan: Find CVEs in dependencies"** step above to see the full JSON report.
+
+          ---
+          *Powered by [Trend Vision One — Artifact Scanner](https://docs.trendmicro.com/en-us/documentation/article/trend-vision-one-integrating-tmas-ci-cd-pipeline)*
+          SUMMARY
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  JOB 2 — Secrets Detection (Source Code)
+# ──────────────────────────────────────────────────────────────────────────────
+  secrets-scan-source:
+    name: "\U0001F510 Secrets Detection — Source Code"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: "Scan: Find leaked credentials"
+        id: secrets_scan
+        uses: trendmicro/tmas-scan-action@v3.1.3
+        with:
+          vulnerabilitiesScan: false
+          malwareScan: false
+          secretsScan: true
+          artifact: dir:.
+          additionalArgs: --region=${{ env.TMAS_REGION }} --redacted
+          tmasApiKey: ${{ secrets.TMAS_API_KEY }}
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write job summary
+        if: always()
+        run: |
+          cat <<'SUMMARY' >> $GITHUB_STEP_SUMMARY
+          ## :lock: Secrets Detection — Source Code
+
+          **What this does:** Scans every file in the repository for accidentally committed
+          credentials — API keys, passwords, private keys, tokens, and webhook URLs.
+
+          **Artifact scanned:** `dir:.` (entire repository)
+
+          **Planted secrets for this demo:**
+          | Type | Example | File |
+          |------|---------|------|
+          | GitHub PAT | `ghp_1234567890abc...` | `app/server.js` |
+          | AWS Access Key | `AKIAIOSFODNN7EXAMPLE` | `app/server.js` |
+          | AWS Secret Key | `wJalrXUtnFEMI/K7MD...` | `app/server.js` |
+          | RSA Private Key | `-----BEGIN RSA PRIVATE KEY-----` | `app/server.js` |
+          | Slack Webhook | `https://hooks.slack.com/...` | `app/server.js` |
+          | Database Password | `SuperSecret123!` | `app/server.js` |
+
+          **`--redacted` flag:** Sensitive values are masked in the output so that CI/CD logs
+          don't become a second leak vector.
+
+          > **TMAS flags:** `-S` (secrets) + `--redacted`
+
+          :arrow_right: Expand the **"Scan: Find leaked credentials"** step above to see findings.
+
+          ---
+          *Powered by [Trend Vision One — Artifact Scanner](https://docs.trendmicro.com/en-us/documentation/article/trend-vision-one-integrating-tmas-ci-cd-pipeline)*
+          SUMMARY
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  JOB 3 — Container Vulnerability Scan
+# ──────────────────────────────────────────────────────────────────────────────
+  vulnerability-scan-container:
+    name: "\U0001F4E6 Vulnerability Scan — Container Image"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build container image
+        run: docker build -t ${{ env.IMAGE_TAG }} .
+
+      - name: "Scan: Find CVEs in container layers"
+        id: container_vuln
+        uses: trendmicro/tmas-scan-action@v3.1.3
+        with:
+          vulnerabilitiesScan: true
+          malwareScan: false
+          secretsScan: true
+          artifact: docker:${{ env.IMAGE_TAG }}
+          additionalArgs: --region=${{ env.TMAS_REGION }} --saveSBOM
+          tmasApiKey: ${{ secrets.TMAS_API_KEY }}
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-container-image
+          path: "*.cdx.json"
+          if-no-files-found: ignore
+
+      - name: Write job summary
+        if: always()
+        run: |
+          cat <<'SUMMARY' >> $GITHUB_STEP_SUMMARY
+          ## :package: Vulnerability Scan — Container Image
+
+          **What this does:** Builds the Docker image, then scans every layer — the base OS
+          packages (Alpine 3.16 APK), application dependencies, and any binaries copied in.
+
+          **Artifact scanned:** `docker:tmas-showcase:scan` (locally built image)
+
+          **Why a container scan finds MORE than a source scan:** Your source code only has your
+          direct dependency files. The built container image includes the full OS package tree,
+          transitive dependencies after `npm install`, and anything added by `RUN` commands.
+          This is why scanning **both** source and container is important.
+
+          **Base image:** `alpine:3.16` — intentionally outdated, with known CVEs in:
+          - `openssl` / `libcrypto3` / `libssl3`
+          - `busybox`
+          - `zlib`
+
+          > **TMAS flags:** `-V` (vulnerabilities) + `-S` (secrets) + `--saveSBOM`
+          >
+          > **Artifact types supported:** `docker:`, `registry:`, `docker-archive:`, `oci-archive:`, `oci-dir:`
+
+          :arrow_right: Download the **SBOM** artifact from the Actions summary to see the full
+          Software Bill of Materials in CycloneDX format.
+
+          ---
+          *Powered by [Trend Vision One — Artifact Scanner](https://docs.trendmicro.com/en-us/documentation/article/trend-vision-one-integrating-tmas-ci-cd-pipeline)*
+          SUMMARY
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  JOB 4 — Malware Detection (Container Image)
+# ──────────────────────────────────────────────────────────────────────────────
+  malware-scan-container:
+    name: "\U0001F9A0 Malware Detection — Container Image"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build container image
+        run: docker build -t ${{ env.IMAGE_TAG }} .
+
+      - name: "Scan: Detect malware in image layers"
+        id: malware_scan
+        uses: trendmicro/tmas-scan-action@v3.1.3
+        with:
+          vulnerabilitiesScan: false
+          malwareScan: true
+          secretsScan: false
+          artifact: docker:${{ env.IMAGE_TAG }}
+          additionalArgs: --region=${{ env.TMAS_REGION }}
+          tmasApiKey: ${{ secrets.TMAS_API_KEY }}
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write job summary
+        if: always()
+        run: |
+          cat <<'SUMMARY' >> $GITHUB_STEP_SUMMARY
+          ## :microbe: Malware Detection — Container Image
+
+          **What this does:** Scans every file in every layer of the container image against
+          Trend Micro's malware detection engine. This catches trojans, cryptominers,
+          backdoors, and other malicious payloads that may have been injected into base images
+          or downloaded during the build.
+
+          **Artifact scanned:** `docker:tmas-showcase:scan` (locally built image)
+
+          **Planted malware for this demo:** The Dockerfile downloads the
+          [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/) — a
+          68-byte string that every antimalware engine recognizes as a test signature.
+          It is completely harmless but proves the scanner works.
+
+          ```
+          X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*
+          ```
+
+          **Why container malware scanning matters:** Supply chain attacks increasingly target
+          container base images and build pipelines. A compromised `npm install` or a
+          backdoored Alpine package can inject malware that traditional code scanners miss.
+          TMAS scans the actual built artifact — not just the source.
+
+          > **TMAS flags:** `-M` (malware)
+          >
+          > **Supported artifact types for malware:** `docker:`, `registry:`, `docker-archive:`,
+          > `oci-archive:`, `oci-dir:` (not `dir:` or `file:`)
+
+          :arrow_right: Expand the **"Scan: Detect malware in image layers"** step above to
+          see the detection result with `scanResult: 1` (malware found).
+
+          ---
+          *Powered by [Trend Vision One — Artifact Scanner](https://docs.trendmicro.com/en-us/documentation/article/trend-vision-one-integrating-tmas-ci-cd-pipeline)*
+          SUMMARY
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  JOB 5 — Policy Evaluation (Security Gate)
+# ──────────────────────────────────────────────────────────────────────────────
+  policy-evaluation:
+    name: "\U0001F6E1\uFE0F Policy Evaluation — Security Gate"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: "Scan: Evaluate against security policy"
+        id: policy_scan
+        continue-on-error: true
+        uses: trendmicro/tmas-scan-action@v3.1.3
+        with:
+          vulnerabilitiesScan: true
+          malwareScan: false
+          secretsScan: true
+          artifact: dir:.
+          additionalArgs: --region=${{ env.TMAS_REGION }} --evaluatePolicy
+          tmasApiKey: ${{ secrets.TMAS_API_KEY }}
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write job summary
+        if: always()
+        run: |
+          cat <<'SUMMARY' >> $GITHUB_STEP_SUMMARY
+          ## :shield: Policy Evaluation — Security Gate
+
+          **What this does:** Runs the same vulnerability + secrets scan, but **also evaluates
+          the results against your Trend Vision One Code Security policy**. If the policy is
+          violated, TMAS exits with code `2` — which can block PR merges when configured as a
+          required status check.
+
+          **Artifact scanned:** `dir:.` (entire repository)
+
+          **How policy-as-code works:**
+          ```
+          ┌──────────┐     ┌──────────┐     ┌──────────────────┐     ┌───────────┐
+          │  Scan    │────▶│ Findings │────▶│ Policy Engine    │────▶│ Pass/Fail │
+          │  -V -S   │     │ (JSON)   │     │ (Vision One)     │     │ (exit 0/2)│
+          └──────────┘     └──────────┘     └──────────────────┘     └───────────┘
+          ```
+
+          **Policy configuration:** Policies are managed in the
+          [Trend Vision One console](https://portal.xdr.trendmicro.com/) under
+          **Code Security > Policies**. You can set thresholds like:
+          - Block if any **Critical** or **High** CVEs are found
+          - Block if any **secrets** are detected
+          - Block if **malware** is detected
+
+          **Using as a required check:** In GitHub, go to **Settings > Branches > Branch
+          protection rules** and add this job as a required status check. PRs that violate
+          the policy will be blocked from merging.
+
+          > **TMAS flags:** `-V` (vulnerabilities) + `-S` (secrets) + `--evaluatePolicy`
+          >
+          > **Exit codes:** `0` = pass, `1` = scan error, `2` = policy violated
+
+          ---
+          *Powered by [Trend Vision One — Artifact Scanner](https://docs.trendmicro.com/en-us/documentation/article/trend-vision-one-integrating-tmas-ci-cd-pipeline)*
+          SUMMARY
